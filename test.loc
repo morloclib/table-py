@@ -1,0 +1,4 @@
+module test-table-py (test)
+
+import table.test (test)
+import table-py
