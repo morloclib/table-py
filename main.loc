@@ -1,18 +1,16 @@
 module table-py (*)
 
 import table
-import vector
+import vector-py
 import root-py
 
 type Py => (Table (n :: Nat) (r :: Rec)) = "arrow" n r
 
--- Vector maps to a Python list at the pool boundary. We deliberately
--- avoid the "numpy.ndarray" fast path here: the pymorloc deserializer
--- only handles float-typed array hints, so an Int (or Str) Vector
--- crossing into Python triggers "Unexpected array hint" otherwise.
--- The list path is uniform across element types and matches what the
--- table kernel functions accept (`pa.array(list(vec))`).
-type Py => (Vector (n :: Nat) a) = "list" a
+-- Vector keeps the numpy mapping from vector-py. An Arrow primitive column
+-- and a numpy array share a contiguous layout, so a column crosses to a
+-- kernel as a view over its own buffer. Declaring a "list" form here would
+-- apply to every Vector in the importing program, not just the ones a table
+-- kernel touches.
 
 source Py from "table.py"
     ( "morloc_asCol"         as asCol
@@ -26,6 +24,7 @@ source Py from "table.py"
     , "morloc_sortRows"      as sortRows
     , "morloc_getCol"        as getCol
     , "morloc_setCol"        as setCol
+    , "morloc_setCol"        as addCol
     , "morloc_dropCols"      as dropCols
     , "morloc_selectCols"    as selectCols
     , "morloc_selectColsDyn" as selectColsDyn

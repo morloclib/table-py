@@ -13,9 +13,21 @@ import pyarrow.compute as pc
 # Construction
 # ---------------------------------------------------------------------------
 
+def _as_arrow(vec):
+    """Adopt a morloc Vector as an Arrow array.
+
+    A numpy array of a primitive dtype is adopted without copying; `pa.array`
+    reuses its buffer directly. Passing a list through `pa.array` would box
+    every element, so the list form is only for vectors that are already
+    lists."""
+    if isinstance(vec, pa.Array):
+        return vec
+    return pa.array(vec)
+
+
 def morloc_asCol(name, vec):
     """Build a single-column RecordBatch carrying `vec` under column `name`."""
-    return pa.RecordBatch.from_arrays([pa.array(list(vec))], names=[name])
+    return pa.RecordBatch.from_arrays([_as_arrow(vec)], names=[name])
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +68,7 @@ def morloc_filterRows(mask, t):
     """Boolean-mask row selection. The filter result is a Table; we
     collapse back to a single batch since morloc Tables are
     RecordBatches at the wire level."""
-    pa_mask = pa.array(list(mask), type=pa.bool_())
+    pa_mask = pa.array(mask, type=pa.bool_())
     filtered = pc.filter(t, pa_mask)
     if filtered.num_rows == 0:
         # filter() returns a RecordBatch directly when input is one;
@@ -69,7 +81,7 @@ def morloc_pickRows(indices, t):
     """Gather rows by integer indices. pyarrow Table.take supports
     arbitrary index orders and duplicates; we round-trip via Table to
     get a take(), then collapse back to a single batch."""
-    idx = pa.array(list(indices), type=pa.int64())
+    idx = pa.array(indices, type=pa.int64())
     tbl = pa.Table.from_batches([t]).take(idx)
     if tbl.num_rows == 0:
         # Preserve the original schema on the empty result.
@@ -118,16 +130,30 @@ def morloc_sortRows(spec, t):
 # ---------------------------------------------------------------------------
 
 def morloc_getCol(name, t):
-    """Extract a column as a list. The wire form is morloc Vector
-    (= List); zero-copy fast path applies when the underlying numpy
-    buffer is contiguous."""
-    return t.column(name).to_pylist()
+    """Extract a column as a Vector.
+
+    An Arrow primitive column and a morloc Vector have the same contiguous
+    layout, so the common case is a view over the column's own buffer with
+    no copy. The view is read-only: morloc values are immutable, and the
+    buffer may be shared memory that another pool is reading.
+
+    A column that cannot be viewed is materialized instead: booleans are
+    bit-packed in Arrow, and anything carrying nulls or a variable-width
+    layout needs its own storage."""
+    col = t.column(name)
+    try:
+        return col.to_numpy(zero_copy_only=True)
+    except (pa.ArrowInvalid, pa.ArrowNotImplementedError):
+        pass
+    if col.null_count == 0 and pa.types.is_boolean(col.type):
+        return col.to_numpy(zero_copy_only=False)
+    return col.to_pylist()
 
 
 def morloc_setCol(name, vec, t):
     """Set or replace a column. If `name` exists in `t`, replace in
     place; otherwise append to the end."""
-    array = pa.array(list(vec))
+    array = _as_arrow(vec)
     cols = list(t.column_names)
     if name in cols:
         idx = cols.index(name)
